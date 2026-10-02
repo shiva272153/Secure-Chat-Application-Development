@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+
+{% block title %}Chat — SecureChat{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
+{% endblock %}
+
+{% block body %}
+<!-- Loading overlay (shown only during active encryption setup) -->
+<div class="loading-overlay hidden" id="loading-overlay">
+    <div class="loader"></div>
+    <p id="loading-text">Initializing secure session...</p>
+</div>
+
+<!-- Hidden fields for private key decryption -->
+<input type="hidden" id="encrypted-private-key" value="{{ encrypted_private_key }}">
+<input type="hidden" id="private-key-iv" value="{{ private_key_iv }}">
+<input type="hidden" id="private-key-salt" value="{{ private_key_salt }}">
+
+<!-- Main Chat Layout -->
+<div class="chat-container" id="chat-page"
+     data-username="{{ username }}"
+     data-display-name="{{ display_name }}"
+     data-bio="{{ bio }}"
+     data-avatar="{{ avatar }}">
+
+    <!-- ═══ Sidebar ═══ -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="sidebar-header-top">
+                <div class="sidebar-brand">
+                    <div class="brand-icon">🔐</div>
+                    <h2>SecureChat</h2>
+                </div>
+                <div class="sidebar-actions">
+                    <button class="btn-icon tooltip" data-tooltip="Start New Chat" id="open-new-chat-btn" aria-label="New Chat">
+                        ➕
+                    </button>
+                    <button class="btn-icon tooltip" data-tooltip="Refresh contacts" id="refresh-contacts-btn" aria-label="Refresh contacts">
+                        🔄
+                    </button>
+                </div>
+            </div>
+
+            <!-- New Chat Action Button -->
+            <div class="new-chat-bar">
+                <button class="btn-start-new-chat" id="sidebar-new-chat-btn">
+                    <span>➕</span>
+                    <span>New Chat</span>
+                </button>
+            </div>
+
+            <!-- Search -->
+            <div class="search-wrapper" style="margin-top: 0.75rem;">
+                <input
+                    type="text"
+                    class="search-input"
+                    id="search-input"
+                    placeholder="Search contacts..."
+                    autocomplete="off"
+                >
+                <span class="search-icon">🔍</span>
+            </div>
+        </div>
+
+        <!-- Contact List -->
+        <div class="user-list" id="user-list">
+            <div class="no-contacts">
+                <div class="empty-users-icon">💬</div>
+                <p>No active conversations yet.</p>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Search for a username to start chatting.</p>
+                <button class="btn-primary-compact" style="margin-top: 0.75rem;" onclick="Chat.openNewChatModal()">
+                    🔍 Search User
+                </button>
+            </div>
+        </div>
+
+        <!-- Current User Profile -->
+        <div class="sidebar-profile" id="sidebar-profile-card">
+            <div class="profile-avatar" id="sidebar-profile-avatar" title="Click to edit profile" style="cursor: pointer;">
+                {% if avatar %}
+                    <img src="{{ avatar }}" alt="{{ display_name }}" class="avatar-img" id="sidebar-avatar-img">
+                {% else %}
+                    <span id="sidebar-avatar-letter">{{ (display_name or username)[0] | upper }}</span>
+                {% endif %}
+            </div>
+            <div class="profile-info" style="cursor: pointer;" id="sidebar-profile-info" title="Click to edit profile">
+                <div class="profile-name" id="sidebar-profile-name">{{ display_name }}</div>
+                <div class="profile-tag" style="display: flex; align-items: center; gap: 4px;">
+                    <span style="color: var(--text-muted); font-size: 0.75rem;">@{{ username }}</span>
+                    <span>•</span>
+                    <span style="color: var(--green-400); font-size: 0.75rem;">Online</span>
+                </div>
+            </div>
+            <div class="sidebar-profile-actions">
+                <button class="btn-icon tooltip" data-tooltip="Edit Profile" id="open-edit-profile-btn" aria-label="Edit Profile">
+                    ✏️
+                </button>
+                <a href="{{ url_for('logout') }}" class="btn-logout" id="logout-btn" title="Log out">Logout</a>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ═══ Main Chat Area ═══ -->
+    <main class="chat-main">
+        <!-- System notification bar -->
+        <div class="system-notification" id="system-notification"></div>
+
+        <!-- Empty state (no chat selected) -->
+        <div class="chat-empty" id="chat-empty">
+            <div class="empty-icon">💬</div>
+            <h3>Welcome to SecureChat, {{ username }}!</h3>
+            <p>Select a contact from the sidebar or click below to start a new end-to-end encrypted conversation.</p>
+            <button class="btn-primary-compact" id="empty-start-chat-btn" style="margin-top: 1.25rem;">
+                ➕ Start New Chat
+            </button>
+            <div class="security-badge" style="margin-top: 2rem;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+                RSA-2048 + AES-256-GCM Zero-Knowledge Encryption
+            </div>
+        </div>
+
+        <!-- Active chat (hidden until contact selected) -->
+        <div class="chat-active" id="chat-active" style="display: none; flex-direction: column; flex: 1;">
+            <!-- Chat Header -->
+            <div class="chat-header">
+                <div class="chat-header-info">
+                    <div class="header-avatar" id="header-avatar">?</div>
+                    <div>
+                        <div class="header-name-wrapper">
+                            <span class="header-name" id="header-name">Select a contact</span>
+                            <span class="header-username-badge" id="header-username-badge"></span>
+                        </div>
+                        <div class="header-status-wrapper">
+                            <div class="header-status" id="header-status">
+                                <span class="status-indicator" id="header-status-dot"></span>
+                                Offline
+                            </div>
+                            <div class="header-bio-preview" id="header-bio-preview"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="chat-header-actions">
+                    <div class="encryption-badge">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        </svg>
+                        E2E Encrypted
+                    </div>
+                </div>
+            </div>
+
+            <!-- Crypto info bar -->
+            <div class="crypto-info">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="16" x2="12" y2="12"/>
+                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                </svg>
+                Messages are secured with AES-256-GCM encryption. Only you and the recipient can read them.
+            </div>
+
+            <!-- Messages -->
+            <div class="messages-area" id="messages-area"></div>
+
+            <!-- Typing indicator -->
+            <div class="typing-indicator" id="typing-indicator">
+                <div class="typing-dots">
+                    <span></span><span></span><span></span>
+                </div>
+                <span class="typing-text" id="typing-text">typing...</span>
+            </div>
+
+            <!-- Message Input -->
+            <div class="message-input-area">
+                <div class="message-input-wrapper">
+                    <textarea
+                        class="message-input"
+                        id="message-input"
+                        placeholder="Type an encrypted message..."
+                        rows="1"
+                        autocomplete="off"
+                    ></textarea>
+                    <button class="btn-send" id="send-btn" title="Send encrypted message">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                            <line x1="22" y1="2" x2="11" y2="13"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- New Chat Modal -->
+<div class="custom-modal-backdrop" id="new-chat-modal" style="display: none;">
+    <div class="custom-modal-card">
+        <div class="custom-modal-header">
+            <div class="modal-title-wrapper">
+                <span class="modal-icon">💬</span>
+                <h3>Start a New Chat</h3>
+            </div>
+            <button class="modal-close-btn" id="close-new-chat-modal" title="Close">&times;</button>
+        </div>
+        <div class="custom-modal-body">
+            <div class="search-wrapper" style="margin-bottom: 1rem;">
+                <input
+                    type="text"
+                    class="search-input"
+                    id="new-chat-search-input"
+                    placeholder="Search users by name..."
+                    autocomplete="off"
+                >
+                <span class="search-icon">🔍</span>
+            </div>
+            <div class="new-chat-users-list" id="new-chat-users-list">
+                <div class="new-chat-hint">
+                    <div class="empty-users-icon">🔍</div>
+                    <p style="font-weight: 600; margin-bottom: 0.25rem;">Search for someone to chat with</p>
+                    <p style="font-size: 0.8125rem; color: var(--text-muted);">Type a username above to search for registered users.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Profile Modal -->
+<div class="custom-modal-backdrop" id="edit-profile-modal" style="display: none;">
+    <div class="custom-modal-card">
+        <div class="custom-modal-header">
+            <div class="modal-title-wrapper">
+                <span class="modal-icon">✏️</span>
+                <h3>Edit Profile</h3>
+            </div>
+            <button class="modal-close-btn" id="close-edit-profile-modal" title="Close">&times;</button>
+        </div>
+        <div class="custom-modal-body">
+            <form id="edit-profile-form">
+                <!-- Avatar Upload Section -->
+                <div class="profile-photo-section">
+                    <div class="profile-photo-preview-wrapper" id="profile-photo-click-area" title="Click to change photo">
+                        <div class="profile-photo-preview" id="edit-profile-avatar-preview">
+                            {% if avatar %}
+                                <img src="{{ avatar }}" alt="Profile Photo" class="avatar-img" id="edit-avatar-img">
+                            {% else %}
+                                <span id="edit-avatar-letter">{{ (display_name or username)[0] | upper }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="profile-photo-overlay">
+                            <span>📷</span>
+                        </div>
+                    </div>
+                    <input type="file" id="profile-avatar-input" accept="image/png,image/jpeg,image/webp,image/gif" style="display: none;">
+                    <div class="profile-photo-actions">
+                        <button type="button" class="btn-subtle" id="change-photo-btn">Change Photo</button>
+                        <button type="button" class="btn-subtle danger" id="remove-photo-btn" {% if not avatar %}style="display: none;"{% endif %}>Remove</button>
+                    </div>
+                    <small style="color: var(--text-muted); font-size: 0.75rem;">Square photo recommended (Auto-optimized)</small>
+                </div>
+
+                <!-- Username (read-only, cryptographic identity) -->
+                <div class="form-group">
+                    <label for="edit-profile-username">Cryptographic Identity</label>
+                    <div class="input-wrapper">
+                        <input
+                            type="text"
+                            class="form-input"
+                            id="edit-profile-username"
+                            value="@{{ username }}"
+                            disabled
+                            style="opacity: 0.7; cursor: not-allowed;"
+                        >
+                        <span class="input-icon">🔒</span>
+                    </div>
+                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.25rem;">
+                        Username is cryptographically bound to your RSA keypair and cannot be changed.
+                    </small>
+                </div>
+
+                <!-- Display Name -->
+                <div class="form-group">
+                    <label for="edit-display-name">Display Name</label>
+                    <div class="input-wrapper">
+                        <input
+                            type="text"
+                            class="form-input"
+                            id="edit-display-name"
+                            value="{{ display_name }}"
+                            placeholder="Your display name"
+                            maxlength="50"
+                            required
+                        >
+                        <span class="input-icon">👤</span>
+                    </div>
+                </div>
+
+                <!-- Bio -->
+                <div class="form-group">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <label for="edit-bio" style="margin-bottom: 0;">Bio / Status</label>
+                        <span id="bio-char-count" style="font-size: 0.75rem; color: var(--text-muted);">{{ bio|length }}/200</span>
+                    </div>
+                    <textarea
+                        class="form-input"
+                        id="edit-bio"
+                        rows="3"
+                        maxlength="200"
+                        placeholder="Tell others a bit about yourself..."
+                        style="resize: none; padding-left: 1rem; line-height: 1.4;"
+                    >{{ bio }}</textarea>
+                </div>
+
+                <div id="edit-profile-error" class="flash-message error" style="display: none; margin-bottom: 1rem;"></div>
+                <div id="edit-profile-success" class="flash-message success" style="display: none; margin-bottom: 1rem;"></div>
+
+                <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+                    <button type="button" class="btn-secondary" id="cancel-edit-profile-btn" style="flex: 1;">Cancel</button>
+                    <button type="submit" class="btn-primary" id="save-profile-btn" style="flex: 2;">
+                        <span class="btn-spinner"></span>
+                        <span class="btn-text">Save Changes</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Session Unlock Modal (prompted if session password needed) -->
+<div class="custom-modal-backdrop" id="unlock-modal" style="display: none;">
+    <div class="custom-modal-card">
+        <div class="custom-modal-header">
+            <div class="modal-title-wrapper">
+                <span class="modal-icon">🔐</span>
+                <h3>Unlock Encrypted Session</h3>
+            </div>
+        </div>
+        <div class="custom-modal-body">
+            <p class="modal-description">Please enter your account password to decrypt your RSA-2048 private key and unlock real-time encrypted messaging.</p>
+            <form id="unlock-form">
+                <div class="form-group">
+                    <label for="unlock-password">Password</label>
+                    <div class="input-wrapper">
+                        <input
+                            type="password"
+                            class="form-input"
+                            id="unlock-password"
+                            placeholder="Enter your account password"
+                            required
+                        >
+                        <span class="input-icon">🔑</span>
+                    </div>
+                </div>
+                <div id="unlock-error" class="flash-message error" style="display: none;"></div>
+                <button type="submit" class="btn-primary" id="unlock-btn">
+                    <span class="btn-spinner"></span>
+                    <span class="btn-text">Unlock Chat</span>
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Socket.IO Client -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+<!-- SecureChat Modules -->
+<script src="{{ url_for('static', filename='js/crypto.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% endblock %}

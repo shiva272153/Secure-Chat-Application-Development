@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Register — SecureChat{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <div class="auth-logo">
+            <div class="logo-icon">🔐</div>
+            <h1>SecureChat</h1>
+            <p>Create your encrypted account</p>
+        </div>
+
+        <!-- Flash messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-message {{ category }}">
+                        {% if category == 'error' %}⚠️{% elif category == 'success' %}✅{% else %}ℹ️{% endif %}
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Key generation status -->
+        <div id="keygen-status" class="keygen-status">
+            🔑 Generating RSA-2048 keypair...
+        </div>
+
+        <form id="register-form">
+            <div class="form-group">
+                <label for="reg-username">Username</label>
+                <div class="input-wrapper">
+                    <input
+                        type="text"
+                        class="form-input"
+                        id="reg-username"
+                        name="username"
+                        placeholder="Choose a username (min 3 chars)"
+                        autocomplete="username"
+                        minlength="3"
+                        required
+                    >
+                    <span class="input-icon">👤</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="reg-password">Password</label>
+                <div class="input-wrapper">
+                    <input
+                        type="password"
+                        class="form-input"
+                        id="reg-password"
+                        name="password"
+                        placeholder="Min 8 characters"
+                        autocomplete="new-password"
+                        minlength="8"
+                        required
+                    >
+                    <span class="input-icon">🔑</span>
+                </div>
+                <div class="password-strength">
+                    <div class="password-strength-bar"></div>
+                </div>
+                <div class="password-strength-text"></div>
+            </div>
+
+            <div class="form-group">
+                <label for="reg-confirm-password">Confirm Password</label>
+                <div class="input-wrapper">
+                    <input
+                        type="password"
+                        class="form-input"
+                        id="reg-confirm-password"
+                        name="confirm_password"
+                        placeholder="Re-enter your password"
+                        autocomplete="new-password"
+                        minlength="8"
+                        required
+                    >
+                    <span class="input-icon">🔒</span>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-primary" id="register-submit-btn">
+                <span class="btn-spinner"></span>
+                <span class="btn-text">Create Account</span>
+            </button>
+        </form>
+
+        <div class="auth-footer">
+            Already have an account? <a href="{{ url_for('login') }}">Sign in</a>
+        </div>
+
+        <div class="security-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            Your RSA keypair is generated in the browser
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/crypto.js') }}"></script>
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Login — SecureChat{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <!-- Gradient top accent is via CSS ::before -->
+
+        <div class="auth-logo">
+            <div class="logo-icon">🔐</div>
+            <h1>SecureChat</h1>
+            <p>End-to-end encrypted messaging</p>
+        </div>
+
+        <!-- Flash messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-message {{ category }}">
+                        {% if category == 'error' %}⚠️{% elif category == 'success' %}✅{% elif category == 'info' %}ℹ️{% else %}⚠️{% endif %}
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form id="login-form" method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label for="login-username">Username</label>
+                <div class="input-wrapper">
+                    <input
+                        type="text"
+                        class="form-input"
+                        id="login-username"
+                        name="username"
+                        placeholder="Enter your username"
+                        autocomplete="username"
+                        required
+                    >
+                    <span class="input-icon">👤</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="login-password">Password</label>
+                <div class="input-wrapper">
+                    <input
+                        type="password"
+                        class="form-input"
+                        id="login-password"
+                        name="password"
+                        placeholder="Enter your password"
+                        autocomplete="current-password"
+                        required
+                    >
+                    <span class="input-icon">🔑</span>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-primary" id="login-submit-btn">
+                <span class="btn-spinner"></span>
+                <span class="btn-text">Sign In</span>
+            </button>
+        </form>
+
+        <div class="auth-footer">
+            Don't have an account? <a href="{{ url_for('register') }}">Create one</a>
+        </div>
+
+        <div class="security-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            Protected with AES-256 & RSA-2048 encryption
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/crypto.js') }}"></script>
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+{% endblock %}
