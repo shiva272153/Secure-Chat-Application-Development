@@ -37,17 +37,24 @@
                     <button class="btn-icon tooltip" data-tooltip="Start New Chat" id="open-new-chat-btn" aria-label="New Chat">
                         ➕
                     </button>
+                    <button class="btn-icon tooltip" data-tooltip="Create Group (Max 60)" id="open-new-group-btn" aria-label="New Group">
+                        👥
+                    </button>
                     <button class="btn-icon tooltip" data-tooltip="Refresh contacts" id="refresh-contacts-btn" aria-label="Refresh contacts">
                         🔄
                     </button>
                 </div>
             </div>
 
-            <!-- New Chat Action Button -->
-            <div class="new-chat-bar">
-                <button class="btn-start-new-chat" id="sidebar-new-chat-btn">
-                    <span>➕</span>
+            <!-- New Chat / Group Action Buttons -->
+            <div class="new-chat-bar" style="display: flex; gap: 0.5rem;">
+                <button class="btn-start-new-chat" id="sidebar-new-chat-btn" style="flex: 1;">
+                    <span>💬</span>
                     <span>New Chat</span>
+                </button>
+                <button class="btn-start-new-chat" id="sidebar-new-group-btn" style="flex: 1; background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(6, 182, 212, 0.2)); border: 1px solid rgba(139, 92, 246, 0.35);">
+                    <span>👥</span>
+                    <span>New Group</span>
                 </button>
             </div>
 
@@ -57,10 +64,19 @@
                     type="text"
                     class="search-input"
                     id="search-input"
-                    placeholder="Search contacts..."
+                    placeholder="Search chats or groups..."
                     autocomplete="off"
                 >
                 <span class="search-icon">🔍</span>
+            </div>
+
+            <!-- Filter Tabs -->
+            <div class="sidebar-tabs" id="sidebar-tabs" style="display: flex; gap: 0.35rem; margin-top: 0.75rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.5rem;">
+                <button class="sidebar-tab active" data-tab="all" id="tab-all">All</button>
+                <button class="sidebar-tab" data-tab="direct" id="tab-direct">Direct</button>
+                <button class="sidebar-tab" data-tab="groups" id="tab-groups">
+                    Groups <span class="tab-badge" id="groups-count-badge" style="display: none;">0</span>
+                </button>
             </div>
         </div>
 
@@ -128,6 +144,11 @@
             <!-- Chat Header -->
             <div class="chat-header">
                 <div class="chat-header-info">
+                    <button class="mobile-back-btn" id="mobile-back-btn" title="Back to chats" aria-label="Back to conversations">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="20" height="20">
+                            <polyline points="15 18 9 12 15 6"></polyline>
+                        </svg>
+                    </button>
                     <div class="header-avatar" id="header-avatar">?</div>
                     <div>
                         <div class="header-name-wrapper">
@@ -144,6 +165,10 @@
                     </div>
                 </div>
                 <div class="chat-header-actions">
+                    <button class="btn-subtle" id="header-group-info-btn" style="display: none; padding: 0.35rem 0.75rem; font-size: 0.8125rem; gap: 0.35rem;" title="View group members and details">
+                        <span>👥</span>
+                        <span>Group Info</span>
+                    </button>
                     <div class="encryption-badge">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
@@ -224,6 +249,135 @@
                     <p style="font-weight: 600; margin-bottom: 0.25rem;">Search for someone to chat with</p>
                     <p style="font-size: 0.8125rem; color: var(--text-muted);">Type a username above to search for registered users.</p>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Group Modal (Max 60 Members) -->
+<div class="custom-modal-backdrop" id="create-group-modal" style="display: none;">
+    <div class="custom-modal-card" style="max-width: 520px;">
+        <div class="custom-modal-header">
+            <div class="modal-title-wrapper">
+                <span class="modal-icon">👥</span>
+                <h3>Create Encrypted Group</h3>
+            </div>
+            <button class="modal-close-btn" id="close-create-group-modal" title="Close">&times;</button>
+        </div>
+        <div class="custom-modal-body">
+            <form id="create-group-form">
+                <div class="form-group">
+                    <label for="group-name-input">Group Name <span style="color: var(--accent-pink);">*</span></label>
+                    <div class="input-wrapper">
+                        <input
+                            type="text"
+                            class="form-input"
+                            id="group-name-input"
+                            placeholder="e.g. Design Team, Research Group"
+                            maxlength="60"
+                            required
+                        >
+                        <span class="input-icon">🏷️</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="group-desc-input">Topic / Description <small style="color: var(--text-muted);">(Optional)</small></label>
+                    <textarea
+                        class="form-input"
+                        id="group-desc-input"
+                        rows="2"
+                        maxlength="200"
+                        placeholder="What is this group about?"
+                        style="resize: none; padding-left: 1rem;"
+                    ></textarea>
+                </div>
+
+                <!-- Member Selection Section with 60 Member Limit -->
+                <div class="form-group" style="margin-bottom: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <label style="margin-bottom: 0;">Group Members</label>
+                        <span class="member-limit-counter" id="create-group-member-count" style="font-size: 0.75rem; color: var(--purple-400); font-weight: 600; padding: 2px 8px; border-radius: 12px; background: rgba(139, 92, 246, 0.15);">1 / 60 members</span>
+                    </div>
+                    
+                    <div class="selected-members-container" id="create-group-selected-chips">
+                        <!-- Dynamic member chips -->
+                    </div>
+
+                    <div class="search-wrapper" style="margin-top: 0.5rem;">
+                        <input
+                            type="text"
+                            class="search-input"
+                            id="group-user-search-input"
+                            placeholder="Search registered users to add..."
+                            autocomplete="off"
+                        >
+                        <span class="search-icon">🔍</span>
+                    </div>
+                </div>
+
+                <div class="group-search-results-list" id="group-user-search-results" style="max-height: 160px; overflow-y: auto; margin-bottom: 1rem;">
+                    <!-- Search results appear here -->
+                </div>
+
+                <div id="create-group-error" class="flash-message error" style="display: none; margin-bottom: 1rem;"></div>
+
+                <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+                    <button type="button" class="btn-secondary" id="cancel-create-group-btn" style="flex: 1;">Cancel</button>
+                    <button type="submit" class="btn-primary" id="submit-create-group-btn" style="flex: 2;">
+                        <span class="btn-spinner"></span>
+                        <span class="btn-text">Create Group</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Group Info & Manage Modal -->
+<div class="custom-modal-backdrop" id="group-info-modal" style="display: none;">
+    <div class="custom-modal-card" style="max-width: 520px;">
+        <div class="custom-modal-header">
+            <div class="modal-title-wrapper">
+                <span class="modal-icon">👥</span>
+                <h3 id="group-info-title">Group Details</h3>
+            </div>
+            <button class="modal-close-btn" id="close-group-info-modal" title="Close">&times;</button>
+        </div>
+        <div class="custom-modal-body">
+            <div class="group-info-header-card" style="text-align: center; padding: 1rem 0; border-bottom: 1px solid var(--border-subtle); margin-bottom: 1rem;">
+                <div class="group-info-avatar-large" id="group-info-avatar" style="width: 60px; height: 60px; border-radius: 50%; background: rgba(139, 92, 246, 0.2); border: 2px solid var(--purple-500); display: flex; align-items: center; justify-content: center; font-size: 1.75rem; margin: 0 auto 0.75rem;">👥</div>
+                <h3 id="group-info-name" style="margin: 0 0 0.25rem;">Group Name</h3>
+                <p id="group-info-desc" style="color: var(--text-muted); font-size: 0.875rem; margin: 0 0 0.5rem;">Group description</p>
+                <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); font-size: 0.75rem; color: var(--purple-300);">
+                    <span>🔒 End-to-End Encrypted</span>
+                    <span>•</span>
+                    <span id="group-info-limit-badge">0 / 60 Members</span>
+                </div>
+            </div>
+
+            <!-- Add Member Section -->
+            <div class="group-add-member-section" id="group-add-member-section" style="margin-bottom: 1rem;">
+                <label style="font-size: 0.8125rem; font-weight: 600; margin-bottom: 0.4rem; display: block;">Add Member to Group (Limit: 60)</label>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" class="form-input" id="group-add-member-input" placeholder="Enter username to add..." style="flex: 1;">
+                    <button type="button" class="btn-primary" id="group-add-member-btn" style="padding: 0 1rem; font-size: 0.875rem; white-space: nowrap;">Add</button>
+                </div>
+                <div id="group-add-member-msg" class="flash-message" style="display: none; margin-top: 0.5rem;"></div>
+            </div>
+
+            <!-- Member List -->
+            <label style="font-size: 0.8125rem; font-weight: 600; margin-bottom: 0.5rem; display: flex; justify-content: space-between;">
+                <span>Group Members</span>
+                <span id="group-info-member-count" style="color: var(--text-muted);">0 members</span>
+            </label>
+            <div class="group-members-list" id="group-info-members-list" style="max-height: 200px; overflow-y: auto; margin-bottom: 1.25rem;">
+                <!-- Rendered member items -->
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: 1rem;">
+                <button type="button" class="btn-subtle danger" id="leave-group-btn" style="color: var(--red-400);">🚪 Leave Group</button>
+                <button type="button" class="btn-secondary" id="close-group-info-footer-btn">Close</button>
             </div>
         </div>
     </div>

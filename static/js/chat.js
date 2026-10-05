@@ -20,12 +20,19 @@ const Chat = (() => {
     let currentBio = '';
     let currentAvatar = '';
     let pendingAvatarDataUrl = null;
-    let activeChat = null;         // Currently selected contact username
+    let activeChat = null;         // Currently selected contact username or group_id
+    let activeChatType = 'direct'; // 'direct' or 'group'
+    let activeGroup = null;        // Active group object if group chat
+    let activeTab = 'all';         // 'all' | 'direct' | 'groups'
+    let selectedGroupMembers = []; // Usernames selected for group creation (max 60)
+    let groupMemberPublicKeys = {};// Cache: { [groupId]: { [username]: CryptoKey } }
+    let groups = [];               // List of user groups
     let privateKey = null;         // Current user's RSA private key (CryptoKey)
     let publicKey = null;          // Current user's RSA public key (CryptoKey)
     let contactPublicKeys = {};    // Cache: { username: CryptoKey }
     let contacts = [];             // List of all contacts
     let typingTimeout = null;
+    let groupSearchDebounceTimer = null;
 
     // DOM elements (populated in init)
     let elements = {};
@@ -101,6 +108,41 @@ const Chat = (() => {
             editProfileError: document.getElementById('edit-profile-error'),
             editProfileSuccess: document.getElementById('edit-profile-success'),
             saveProfileBtn: document.getElementById('save-profile-btn'),
+            // Group Chat elements
+            sidebarNewGroupBtn: document.getElementById('sidebar-new-group-btn'),
+            openNewGroupBtn: document.getElementById('open-new-group-btn'),
+            createGroupModal: document.getElementById('create-group-modal'),
+            closeCreateGroupModal: document.getElementById('close-create-group-modal'),
+            cancelCreateGroupBtn: document.getElementById('cancel-create-group-btn'),
+            createGroupForm: document.getElementById('create-group-form'),
+            groupNameInput: document.getElementById('group-name-input'),
+            groupDescInput: document.getElementById('group-desc-input'),
+            groupUserSearchInput: document.getElementById('group-user-search-input'),
+            groupUserSearchResults: document.getElementById('group-user-search-results'),
+            createGroupSelectedChips: document.getElementById('create-group-selected-chips'),
+            createGroupMemberCount: document.getElementById('create-group-member-count'),
+            createGroupError: document.getElementById('create-group-error'),
+            submitCreateGroupBtn: document.getElementById('submit-create-group-btn'),
+            headerGroupInfoBtn: document.getElementById('header-group-info-btn'),
+            groupInfoModal: document.getElementById('group-info-modal'),
+            closeGroupInfoModal: document.getElementById('close-group-info-modal'),
+            closeGroupInfoFooterBtn: document.getElementById('close-group-info-footer-btn'),
+            groupInfoTitle: document.getElementById('group-info-title'),
+            groupInfoAvatar: document.getElementById('group-info-avatar'),
+            groupInfoName: document.getElementById('group-info-name'),
+            groupInfoDesc: document.getElementById('group-info-desc'),
+            groupInfoLimitBadge: document.getElementById('group-info-limit-badge'),
+            groupInfoMemberCount: document.getElementById('group-info-member-count'),
+            groupInfoMembersList: document.getElementById('group-info-members-list'),
+            groupAddMemberInput: document.getElementById('group-add-member-input'),
+            groupAddMemberBtn: document.getElementById('group-add-member-btn'),
+            groupAddMemberMsg: document.getElementById('group-add-member-msg'),
+            leaveGroupBtn: document.getElementById('leave-group-btn'),
+            tabAll: document.getElementById('tab-all'),
+            tabDirect: document.getElementById('tab-direct'),
+            tabGroups: document.getElementById('tab-groups'),
+            groupsCountBadge: document.getElementById('groups-count-badge'),
+            mobileBackBtn: document.getElementById('mobile-back-btn'),
         };
 
         // Set up event listeners right away so buttons & UI are immediately active
@@ -113,11 +155,11 @@ const Chat = (() => {
             console.error('[Chat] Socket connection failed:', e);
         }
 
-        // Step 2: Load contacts immediately
+        // Step 2: Load contacts and groups simultaneously
         try {
-            await loadContacts();
+            await Promise.all([loadContacts(), loadGroups()]);
         } catch (e) {
-            console.error('[Chat] Contacts loading failed:', e);
+            console.error('[Chat] Contacts/groups loading failed:', e);
         }
 
         // Step 3: Decrypt private key (or prompt user if session password needed)
@@ -237,6 +279,35 @@ const Chat = (() => {
             handleProfileUpdated(data);
         });
 
+        // ── Group Chat Socket Events ──
+        socket.on('receive_group_message', async (data) => {
+            await handleIncomingGroupMessage(data);
+        });
+
+        socket.on('group_created', (data) => {
+            handleGroupCreated(data);
+        });
+
+        socket.on('group_updated', (data) => {
+            handleGroupUpdated(data);
+        });
+
+        socket.on('group_left', (data) => {
+            handleGroupLeft(data);
+        });
+
+        socket.on('group_user_typing', (data) => {
+            if (activeChatType === 'group' && data.group_id === activeChat && data.username !== currentUser) {
+                showTypingIndicator(`@${data.username}`);
+            }
+        });
+
+        socket.on('group_user_stop_typing', (data) => {
+            if (activeChatType === 'group' && data.group_id === activeChat) {
+                hideTypingIndicator();
+            }
+        });
+
         socket.on('error', (data) => {
             console.error('[Socket] Error:', data.message);
             showNotification(data.message, 'error');
@@ -259,13 +330,13 @@ const Chat = (() => {
             const response = await fetch('/api/conversations');
             if (response.ok) {
                 contacts = await response.json();
-                renderContacts(contacts);
+                renderSidebarList();
             } else {
                 console.error('[Chat] Failed to load conversations, status:', response.status);
             }
         } catch (error) {
             console.error('[Chat] Failed to load conversations:', error);
-            if (elements.userList && contacts.length === 0) {
+            if (elements.userList && contacts.length === 0 && groups.length === 0) {
                 elements.userList.innerHTML = `
                     <div class="no-contacts">
                         <p style="color: var(--red-400);">Failed to load conversations.</p>
@@ -278,6 +349,33 @@ const Chat = (() => {
         }
     }
 
+    async function loadGroups() {
+        try {
+            const response = await fetch('/api/groups');
+            if (response.ok) {
+                const data = await response.json();
+                const fetchedGroups = data.groups || [];
+                // STRICT CHECK: show ONLY groups where currentUser is an explicit member
+                groups = fetchedGroups.filter(g => Array.isArray(g.members) && g.members.includes(currentUser));
+                updateGroupsCountBadge();
+                renderSidebarList();
+            }
+        } catch (error) {
+            console.error('[Chat] Failed to load groups:', error);
+        }
+    }
+
+    function updateGroupsCountBadge() {
+        if (!elements.groupsCountBadge) return;
+        const myCount = groups.filter(g => Array.isArray(g.members) && g.members.includes(currentUser)).length;
+        if (myCount > 0) {
+            elements.groupsCountBadge.textContent = myCount;
+            elements.groupsCountBadge.style.display = 'inline-block';
+        } else {
+            elements.groupsCountBadge.style.display = 'none';
+        }
+    }
+
     function renderAvatar(avatarUrl, nameOrUsername) {
         const initial = (nameOrUsername || '?').charAt(0).toUpperCase();
         if (avatarUrl) {
@@ -287,52 +385,125 @@ const Chat = (() => {
     }
 
     function renderContacts(contactList) {
+        renderSidebarList();
+    }
+
+    function renderSidebarList() {
         if (!elements.userList) return;
 
-        if (contactList.length === 0) {
+        const showGroups = (activeTab === 'all' || activeTab === 'groups');
+        const showDirect = (activeTab === 'all' || activeTab === 'direct');
+
+        // Strictly filter only groups where current user is an active member
+        const myGroups = groups.filter(g => Array.isArray(g.members) && g.members.includes(currentUser));
+
+        const hasGroups = myGroups.length > 0;
+        const hasDirect = contacts.length > 0;
+
+        if (!hasGroups && !hasDirect) {
             elements.userList.innerHTML = `
                 <div class="no-contacts">
                     <div class="empty-users-icon">💬</div>
-                    <p>No active conversations yet.</p>
-                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Search for a username to start an encrypted chat.</p>
-                    <button class="btn-primary-compact" style="margin-top: 0.75rem;" onclick="Chat.openNewChatModal()">
-                        🔍 Search User
-                    </button>
+                    <p>No active conversations or groups yet.</p>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Start a chat or create a group (up to 60 members).</p>
+                    <div style="display: flex; gap: 0.5rem; justify-content: center; margin-top: 0.75rem;">
+                        <button class="btn-primary-compact" onclick="Chat.openNewChatModal()">🔍 New Chat</button>
+                        <button class="btn-primary-compact" style="background: rgba(139, 92, 246, 0.2); border: 1px solid var(--purple-500);" onclick="Chat.openCreateGroupModal()">👥 New Group</button>
+                    </div>
                 </div>
             `;
             return;
         }
 
-        elements.userList.innerHTML = contactList.map(user => {
-            const displayName = user.display_name || user.username;
-            const subtitle = user.is_online ? 'Online' : (user.bio ? escapeHtml(user.bio) : 'Offline');
-            return `
-            <div class="user-item ${activeChat === user.username ? 'active' : ''}"
-                 data-username="${user.username}"
-                 onclick="Chat.selectContact('${user.username}')">
-                <div class="avatar">
-                    ${renderAvatar(user.avatar, displayName)}
-                    <span class="status-dot ${user.is_online ? 'online' : 'offline'}"></span>
-                </div>
-                <div class="user-info">
-                    <div class="user-name">${escapeHtml(displayName)}</div>
-                    <div class="user-status-text ${user.is_online ? 'online' : ''}">
-                        ${subtitle}
+        let html = '';
+
+        // 1. Render Encrypted Groups (only groups currentUser belongs to)
+        if (showGroups && hasGroups) {
+            if (activeTab === 'all') {
+                html += `<div style="font-size: 0.6875rem; font-weight: 700; color: var(--purple-400); text-transform: uppercase; letter-spacing: 0.5px; padding: 0.5rem 0.75rem 0.25rem;">Encrypted Groups</div>`;
+            }
+            html += myGroups.map(group => {
+                const isActive = activeChatType === 'group' && activeChat === group.group_id;
+                const mCount = group.member_count || (group.members ? group.members.length : 1);
+                return `
+                <div class="user-item group-chat-item ${isActive ? 'active' : ''}"
+                     data-group-id="${group.group_id}"
+                     onclick="Chat.selectGroup('${group.group_id}')">
+                    <div class="avatar" style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(6, 182, 212, 0.3)); border: 1px solid rgba(139, 92, 246, 0.5); color: #c084fc; display: flex; align-items: center; justify-content: center; font-size: 1.15rem;">
+                        👥
+                    </div>
+                    <div class="user-info">
+                        <div class="user-name" style="display: flex; align-items: center; justify-content: space-between;">
+                            <span>${escapeHtml(group.name)}</span>
+                            <span class="group-badge-tag">${mCount}/60</span>
+                        </div>
+                        <div class="user-status-text">
+                            ${group.description ? escapeHtml(group.description) : `${mCount} members • Encrypted`}
+                        </div>
                     </div>
                 </div>
-            </div>
+                `;
+            }).join('');
+        } else if (activeTab === 'groups' && !hasGroups) {
+            html += `
+                <div class="no-contacts">
+                    <div class="empty-users-icon">👥</div>
+                    <p>No groups joined yet.</p>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Create a private encrypted group or get invited by a member.</p>
+                    <button class="btn-primary-compact" style="margin-top: 0.75rem;" onclick="Chat.openCreateGroupModal()">
+                        👥 Create Group
+                    </button>
+                </div>
             `;
-        }).join('');
+        }
+
+        // 2. Render Direct Contacts
+        if (showDirect && hasDirect) {
+            if (activeTab === 'all' && hasGroups) {
+                html += `<div style="font-size: 0.6875rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 0.75rem 0.75rem 0.25rem;">Direct Messages</div>`;
+            }
+            html += contacts.map(user => {
+                const displayName = user.display_name || user.username;
+                const subtitle = user.is_online ? 'Online' : (user.bio ? escapeHtml(user.bio) : 'Offline');
+                const isActive = activeChatType === 'direct' && activeChat === user.username;
+                return `
+                <div class="user-item ${isActive ? 'active' : ''}"
+                     data-username="${user.username}"
+                     onclick="Chat.selectContact('${user.username}')">
+                    <div class="avatar">
+                        ${renderAvatar(user.avatar, displayName)}
+                        <span class="status-dot ${user.is_online ? 'online' : 'offline'}"></span>
+                    </div>
+                    <div class="user-info">
+                        <div class="user-name">${escapeHtml(displayName)}</div>
+                        <div class="user-status-text ${user.is_online ? 'online' : ''}">
+                            ${subtitle}
+                        </div>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        } else if (activeTab === 'direct' && !hasDirect) {
+            html += `
+                <div class="no-contacts">
+                    <div class="empty-users-icon">💬</div>
+                    <p>No direct conversations yet.</p>
+                    <button class="btn-primary-compact" style="margin-top: 0.75rem;" onclick="Chat.openNewChatModal()">
+                        🔍 Search User
+                    </button>
+                </div>
+            `;
+        }
+
+        elements.userList.innerHTML = html;
     }
 
     function updateUserStatus(username, online) {
-        // Update in contacts array
         const contact = contacts.find(c => c.username === username);
         if (contact) {
             contact.is_online = online;
         }
 
-        // Update DOM
         const userItem = document.querySelector(`.user-item[data-username="${username}"]`);
         if (userItem) {
             const dot = userItem.querySelector('.status-dot');
@@ -346,8 +517,7 @@ const Chat = (() => {
             }
         }
 
-        // Update chat header if this is the active chat
-        if (username === activeChat) {
+        if (activeChatType === 'direct' && username === activeChat) {
             if (elements.headerStatusDot) {
                 elements.headerStatusDot.className = `status-indicator ${online ? 'online' : ''}`;
             }
@@ -363,27 +533,57 @@ const Chat = (() => {
     function filterContacts(query) {
         const trimmed = (query || '').trim().toLowerCase();
         if (!trimmed) {
-            renderContacts(contacts);
+            renderSidebarList();
             return;
         }
 
-        const filtered = contacts.filter(c =>
-            c.username.toLowerCase().includes(trimmed)
+        const filteredContacts = contacts.filter(c =>
+            c.username.toLowerCase().includes(trimmed) || (c.display_name && c.display_name.toLowerCase().includes(trimmed))
+        );
+        const filteredGroups = groups.filter(g =>
+            Array.isArray(g.members) && g.members.includes(currentUser) && g.name.toLowerCase().includes(trimmed)
         );
 
-        if (filtered.length > 0) {
-            renderContacts(filtered);
-        } else {
-            if (elements.userList) {
-                elements.userList.innerHTML = `
-                    <div class="no-contacts">
-                        <p style="font-size: 0.8125rem;">No active chat with "${escapeHtml(trimmed)}"</p>
-                        <button class="btn-primary-compact" style="margin-top: 0.5rem;" onclick="Chat.openNewChatWithQuery('${escapeHtml(trimmed)}')">
-                            🔍 Search All Users
-                        </button>
+        if (filteredContacts.length > 0 || filteredGroups.length > 0) {
+            let html = '';
+            if (filteredGroups.length > 0) {
+                html += `<div style="font-size: 0.6875rem; font-weight: 700; color: var(--purple-400); padding: 0.5rem 0.75rem 0.25rem;">Groups</div>`;
+                html += filteredGroups.map(group => `
+                    <div class="user-item group-chat-item ${activeChat === group.group_id ? 'active' : ''}"
+                         data-group-id="${group.group_id}"
+                         onclick="Chat.selectGroup('${group.group_id}')">
+                        <div class="avatar" style="background: rgba(139, 92, 246, 0.2); display: flex; align-items: center; justify-content: center;">👥</div>
+                        <div class="user-info">
+                            <div class="user-name">${escapeHtml(group.name)}</div>
+                            <div class="user-status-text">${group.member_count || group.members.length}/60 members</div>
+                        </div>
                     </div>
-                `;
+                `).join('');
             }
+            if (filteredContacts.length > 0) {
+                html += `<div style="font-size: 0.6875rem; font-weight: 700; color: var(--text-muted); padding: 0.5rem 0.75rem 0.25rem;">Contacts</div>`;
+                html += filteredContacts.map(user => `
+                    <div class="user-item ${activeChat === user.username ? 'active' : ''}"
+                         data-username="${user.username}"
+                         onclick="Chat.selectContact('${user.username}')">
+                        <div class="avatar">${renderAvatar(user.avatar, user.display_name || user.username)}</div>
+                        <div class="user-info">
+                            <div class="user-name">${escapeHtml(user.display_name || user.username)}</div>
+                            <div class="user-status-text">@${escapeHtml(user.username)}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            elements.userList.innerHTML = html;
+        } else {
+            elements.userList.innerHTML = `
+                <div class="no-contacts">
+                    <p style="font-size: 0.8125rem;">No results for "${escapeHtml(trimmed)}"</p>
+                    <button class="btn-primary-compact" style="margin-top: 0.5rem;" onclick="Chat.openNewChatWithQuery('${escapeHtml(trimmed)}')">
+                        🔍 Search All Users
+                    </button>
+                </div>
+            `;
         }
     }
 
@@ -393,20 +593,23 @@ const Chat = (() => {
     // ──────────────────────────────────────────────
 
     async function selectContact(username) {
-        if (activeChat === username) return;
+        if (activeChat === username && activeChatType === 'direct') return;
 
         activeChat = username;
+        activeChatType = 'direct';
+        activeGroup = null;
 
-        // Update UI
+        if (elements.headerGroupInfoBtn) elements.headerGroupInfoBtn.style.display = 'none';
+
+        document.querySelector('.chat-container')?.classList.add('mobile-chat-open');
+
         document.querySelectorAll('.user-item').forEach(el => {
             el.classList.toggle('active', el.dataset.username === username);
         });
 
-        // Show chat panel
         if (elements.chatEmpty) elements.chatEmpty.style.display = 'none';
         if (elements.chatActive) elements.chatActive.style.display = 'flex';
 
-        // Set header info
         const contact = contacts.find(c => c.username === username);
         const displayName = contact?.display_name || username;
         const bio = contact?.bio || '';
@@ -424,7 +627,6 @@ const Chat = (() => {
             `;
         }
 
-        // Fetch and cache recipient's public key
         if (!contactPublicKeys[username]) {
             try {
                 const response = await fetch(`/api/public_key/${username}`);
@@ -437,11 +639,143 @@ const Chat = (() => {
             }
         }
 
-        // Load chat history
         await loadChatHistory(username);
 
-        // Focus message input
         if (elements.messageInput) elements.messageInput.focus();
+    }
+
+    async function selectGroup(groupId) {
+        if (activeChat === groupId && activeChatType === 'group') return;
+
+        activeChat = groupId;
+        activeChatType = 'group';
+
+        if (elements.headerGroupInfoBtn) elements.headerGroupInfoBtn.style.display = 'inline-flex';
+
+        document.querySelector('.chat-container')?.classList.add('mobile-chat-open');
+
+        document.querySelectorAll('.user-item').forEach(el => {
+            el.classList.toggle('active', el.dataset.groupId === groupId);
+        });
+
+        if (elements.chatEmpty) elements.chatEmpty.style.display = 'none';
+        if (elements.chatActive) elements.chatActive.style.display = 'flex';
+
+        try {
+            const res = await fetch(`/api/groups/${groupId}`);
+            const data = await res.json();
+            if (!res.ok || !data.success || !data.group) {
+                showNotification(data.error || 'Access denied: You are not a member of this group.', 'error');
+                activeChat = null;
+                activeChatType = 'direct';
+                activeGroup = null;
+                if (elements.chatActive) elements.chatActive.style.display = 'none';
+                if (elements.chatEmpty) elements.chatEmpty.style.display = 'flex';
+                return;
+            }
+
+            activeGroup = data.group;
+            const members = data.members || [];
+
+            // STRICT MEMBERSHIP CHECK: User must be in group's members
+            if (!Array.isArray(activeGroup.members) || !activeGroup.members.includes(currentUser)) {
+                showNotification('You are not a member of this group.', 'error');
+                activeChat = null;
+                activeChatType = 'direct';
+                activeGroup = null;
+                if (elements.chatActive) elements.chatActive.style.display = 'none';
+                if (elements.chatEmpty) elements.chatEmpty.style.display = 'flex';
+                return;
+            }
+
+                if (elements.headerName) elements.headerName.textContent = activeGroup.name;
+                if (elements.headerUsernameBadge) elements.headerUsernameBadge.textContent = `👥 Group (${members.length}/60)`;
+                if (elements.headerAvatar) elements.headerAvatar.innerHTML = `<span style="font-size: 1.25rem;">👥</span>`;
+                if (elements.headerBioPreview) elements.headerBioPreview.textContent = activeGroup.description ? `“${activeGroup.description}”` : '';
+                if (elements.headerStatus) {
+                    elements.headerStatus.innerHTML = `
+                        <span class="status-indicator online" id="header-status-dot"></span>
+                        ${members.length} members • Encrypted Group
+                    `;
+                }
+
+                // Cache all members' public keys
+                if (!groupMemberPublicKeys[groupId]) groupMemberPublicKeys[groupId] = {};
+                for (const m of members) {
+                    if (m.public_key && !groupMemberPublicKeys[groupId][m.username]) {
+                        try {
+                            groupMemberPublicKeys[groupId][m.username] = await SecureCrypto.importPublicKey(m.public_key);
+                        } catch (err) {
+                            console.error(`Failed to import key for group member ${m.username}:`, err);
+                        }
+                    }
+                }
+
+                if (socket) {
+                    socket.emit('join_group_room', { group_id: groupId });
+                }
+
+                await loadGroupChatHistory(groupId);
+        } catch (e) {
+            console.error('[Chat] Failed to load group details:', e);
+            showNotification('Failed to open group', 'error');
+        }
+
+        if (elements.messageInput) elements.messageInput.focus();
+    }
+
+    async function loadGroupChatHistory(groupId) {
+        if (!elements.messagesArea) return;
+        elements.messagesArea.innerHTML = '';
+
+        try {
+            const response = await fetch(`/api/groups/${groupId}/messages`);
+            const messages = await response.json();
+
+            if (messages.length === 0) {
+                elements.messagesArea.innerHTML = `
+                    <div class="date-separator">
+                        <span>👥 Group created. Messages are end-to-end encrypted (max 60 members).</span>
+                    </div>
+                `;
+                return;
+            }
+
+            appendDateSeparator('🔐 End-to-end encrypted group');
+
+            let lastDate = '';
+            for (const msg of messages) {
+                const msgDate = new Date(msg.timestamp).toLocaleDateString();
+                if (msgDate !== lastDate) {
+                    appendDateSeparator(msgDate);
+                    lastDate = msgDate;
+                }
+
+                try {
+                    const plaintext = await SecureCrypto.decryptGroupMessage(msg, privateKey, currentUser);
+                    appendGroupMessage({
+                        sender: msg.sender,
+                        plaintext: plaintext,
+                        timestamp: msg.timestamp,
+                        isSent: msg.sender === currentUser,
+                        animate: false
+                    });
+                } catch (err) {
+                    console.error('[Chat] Group message decryption failed:', err);
+                    appendGroupMessage({
+                        sender: msg.sender,
+                        plaintext: '[🔒 Unable to decrypt]',
+                        timestamp: msg.timestamp,
+                        isSent: msg.sender === currentUser,
+                        animate: false
+                    });
+                }
+            }
+
+            scrollToBottom();
+        } catch (e) {
+            console.error('[Chat] Failed to load group messages:', e);
+        }
     }
 
     async function loadChatHistory(username) {
@@ -491,7 +825,7 @@ const Chat = (() => {
 
 
     // ──────────────────────────────────────────────
-    // Message Sending
+    // Message Sending & Receiving (Direct & Group)
     // ──────────────────────────────────────────────
 
     async function sendMessage() {
@@ -499,6 +833,11 @@ const Chat = (() => {
 
         const plaintext = elements.messageInput.value.trim();
         if (!plaintext) return;
+
+        if (activeChatType === 'group') {
+            await sendGroupMessage(plaintext);
+            return;
+        }
 
         const recipientPublicKey = contactPublicKeys[activeChat];
         if (!recipientPublicKey) {
@@ -545,30 +884,78 @@ const Chat = (() => {
         }
     }
 
+    async function sendGroupMessage(plaintext) {
+        const groupId = activeChat;
+        if (!elements.messageInput) return;
 
-    // ──────────────────────────────────────────────
-    // Message Receiving
-    // ──────────────────────────────────────────────
+        elements.messageInput.value = '';
+        elements.messageInput.style.height = 'auto';
+
+        socket.emit('group_stop_typing', { group_id: groupId });
+
+        try {
+            let memberKeys = groupMemberPublicKeys[groupId];
+            if (!memberKeys || Object.keys(memberKeys).length === 0) {
+                const res = await fetch(`/api/groups/${groupId}`);
+                const data = await res.json();
+                if (data.success && data.members) {
+                    groupMemberPublicKeys[groupId] = {};
+                    for (const m of data.members) {
+                        if (m.public_key) {
+                            groupMemberPublicKeys[groupId][m.username] = await SecureCrypto.importPublicKey(m.public_key);
+                        }
+                    }
+                    memberKeys = groupMemberPublicKeys[groupId];
+                }
+            }
+
+            if (!memberKeys || Object.keys(memberKeys).length === 0) {
+                showNotification('Cannot send: group keys not loaded.', 'error');
+                return;
+            }
+
+            if (publicKey && !memberKeys[currentUser]) {
+                memberKeys[currentUser] = publicKey;
+            }
+
+            const encrypted = await SecureCrypto.encryptForGroup(plaintext, memberKeys);
+
+            socket.emit('group_send_message', {
+                group_id: groupId,
+                ciphertext: encrypted.ciphertext,
+                iv: encrypted.iv,
+                encrypted_keys: encrypted.encrypted_keys,
+            });
+
+            appendGroupMessage({
+                sender: currentUser,
+                plaintext: plaintext,
+                timestamp: new Date().toISOString(),
+                isSent: true,
+                animate: true
+            });
+            scrollToBottom();
+
+        } catch (err) {
+            console.error('[Chat] Group send error:', err);
+            showNotification('Failed to send group message.', 'error');
+        }
+    }
 
     async function handleIncomingMessage(data) {
         try {
             const plaintext = await SecureCrypto.decryptReceived(data, privateKey, currentUser);
 
-            // Ensure sender is in our conversations list
             if (!contacts.find(c => c.username === data.sender)) {
                 await loadContacts();
             }
 
-            // If this message is for the currently active chat
-            if (data.sender === activeChat) {
+            if (activeChatType === 'direct' && data.sender === activeChat) {
                 appendMessage(plaintext, false, data.timestamp, true);
                 scrollToBottom();
                 hideTypingIndicator();
             } else {
-                // Show notification for other chats
                 showNotification(`New message from ${data.sender}`, 'info');
-
-                // Update the contact list to show unread indicator
                 const userItem = document.querySelector(`.user-item[data-username="${data.sender}"]`);
                 if (userItem) {
                     userItem.style.borderLeft = '3px solid var(--purple-500)';
@@ -576,6 +963,37 @@ const Chat = (() => {
             }
         } catch (error) {
             console.error('[Chat] Failed to decrypt incoming message:', error);
+        }
+    }
+
+    async function handleIncomingGroupMessage(data) {
+        try {
+            if (data.sender === currentUser) return;
+
+            const plaintext = await SecureCrypto.decryptGroupMessage(data, privateKey, currentUser);
+
+            if (activeChatType === 'group' && activeChat === data.group_id) {
+                appendGroupMessage({
+                    sender: data.sender,
+                    plaintext: plaintext,
+                    timestamp: data.timestamp,
+                    isSent: false,
+                    animate: true
+                });
+                scrollToBottom();
+                hideTypingIndicator();
+            } else {
+                const group = groups.find(g => g.group_id === data.group_id);
+                const gName = group ? group.name : 'Group';
+                showNotification(`👥 ${gName} — @${data.sender}: ${plaintext.slice(0, 30)}`, 'info');
+
+                const gItem = document.querySelector(`.user-item[data-group-id="${data.group_id}"]`);
+                if (gItem) {
+                    gItem.style.borderLeft = '3px solid var(--purple-500)';
+                }
+            }
+        } catch (err) {
+            console.error('[Chat] Failed to decrypt group message:', err);
         }
     }
 
@@ -608,6 +1026,37 @@ const Chat = (() => {
         elements.messagesArea.appendChild(group);
     }
 
+    function appendGroupMessage({ sender, plaintext, timestamp, isSent, animate = true }) {
+        if (!elements.messagesArea) return;
+
+        const time = new Date(timestamp);
+        const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        const group = document.createElement('div');
+        group.className = `message-group ${isSent ? 'sent' : 'received'}`;
+        if (!animate) {
+            group.style.animation = 'none';
+            group.style.opacity = '1';
+        }
+
+        const senderHeader = (!isSent) 
+            ? `<div class="group-sender-header"><span class="sender-name">${escapeHtml(sender)}</span></div>`
+            : '';
+
+        group.innerHTML = `
+            <div class="message-bubble">
+                ${senderHeader}
+                <div class="message-content">${escapeHtml(plaintext)}</div>
+            </div>
+            <div class="message-meta">
+                <span class="message-lock-icon">🔒</span>
+                <span>${timeStr}</span>
+            </div>
+        `;
+
+        elements.messagesArea.appendChild(group);
+    }
+
     function appendDateSeparator(text) {
         if (!elements.messagesArea) return;
 
@@ -623,13 +1072,6 @@ const Chat = (() => {
         }
     }
 
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-
     // ──────────────────────────────────────────────
     // Typing Indicators
     // ──────────────────────────────────────────────
@@ -637,12 +1079,19 @@ const Chat = (() => {
     function handleTyping() {
         if (!activeChat) return;
 
-        socket.emit('typing', { recipient: activeChat });
-
         clearTimeout(typingTimeout);
-        typingTimeout = setTimeout(() => {
-            socket.emit('stop_typing', { recipient: activeChat });
-        }, 2000);
+
+        if (activeChatType === 'group') {
+            socket.emit('group_typing', { group_id: activeChat });
+            typingTimeout = setTimeout(() => {
+                socket.emit('group_stop_typing', { group_id: activeChat });
+            }, 2000);
+        } else {
+            socket.emit('typing', { recipient: activeChat });
+            typingTimeout = setTimeout(() => {
+                socket.emit('stop_typing', { recipient: activeChat });
+            }, 2000);
+        }
     }
 
     function showTypingIndicator(username) {
@@ -838,6 +1287,87 @@ const Chat = (() => {
         }
         if (elements.editProfileForm) {
             elements.editProfileForm.addEventListener('submit', handleEditProfileSubmit);
+        }
+
+        // ── Sidebar Tabs (All / Direct / Groups) ──
+        if (elements.tabAll) {
+            elements.tabAll.addEventListener('click', () => handleTabClick('all'));
+        }
+        if (elements.tabDirect) {
+            elements.tabDirect.addEventListener('click', () => handleTabClick('direct'));
+        }
+        if (elements.tabGroups) {
+            elements.tabGroups.addEventListener('click', () => handleTabClick('groups'));
+        }
+
+        // ── Create Group Event Listeners ──
+        if (elements.sidebarNewGroupBtn) {
+            elements.sidebarNewGroupBtn.addEventListener('click', openCreateGroupModal);
+        }
+        if (elements.openNewGroupBtn) {
+            elements.openNewGroupBtn.addEventListener('click', openCreateGroupModal);
+        }
+        if (elements.closeCreateGroupModal) {
+            elements.closeCreateGroupModal.addEventListener('click', closeCreateGroupModal);
+        }
+        if (elements.cancelCreateGroupBtn) {
+            elements.cancelCreateGroupBtn.addEventListener('click', closeCreateGroupModal);
+        }
+        if (elements.createGroupModal) {
+            elements.createGroupModal.addEventListener('click', (e) => {
+                if (e.target === elements.createGroupModal) closeCreateGroupModal();
+            });
+        }
+        if (elements.groupUserSearchInput) {
+            elements.groupUserSearchInput.addEventListener('input', (e) => {
+                handleGroupUserSearch(e.target.value);
+            });
+        }
+        if (elements.createGroupForm) {
+            elements.createGroupForm.addEventListener('submit', handleCreateGroupSubmit);
+        }
+
+        // ── Group Info Modal Event Listeners ──
+        if (elements.headerGroupInfoBtn) {
+            elements.headerGroupInfoBtn.addEventListener('click', openGroupInfoModal);
+        }
+        if (elements.closeGroupInfoModal) {
+            elements.closeGroupInfoModal.addEventListener('click', closeGroupInfoModal);
+        }
+        if (elements.closeGroupInfoFooterBtn) {
+            elements.closeGroupInfoFooterBtn.addEventListener('click', closeGroupInfoModal);
+        }
+        if (elements.groupInfoModal) {
+            elements.groupInfoModal.addEventListener('click', (e) => {
+                if (e.target === elements.groupInfoModal) closeGroupInfoModal();
+            });
+        }
+        if (elements.groupAddMemberBtn) {
+            elements.groupAddMemberBtn.addEventListener('click', handleAddMemberToGroup);
+        }
+        if (elements.groupAddMemberInput) {
+            elements.groupAddMemberInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddMemberToGroup();
+                }
+            });
+        }
+        if (elements.leaveGroupBtn) {
+            elements.leaveGroupBtn.addEventListener('click', handleLeaveGroup);
+        }
+
+        // ── Mobile Back Button ──
+        if (elements.mobileBackBtn) {
+            elements.mobileBackBtn.addEventListener('click', () => {
+                document.querySelector('.chat-container')?.classList.remove('mobile-chat-open');
+                activeChat = null;
+                activeChatType = 'direct';
+                activeGroup = null;
+                if (elements.chatActive) elements.chatActive.style.display = 'none';
+                if (elements.chatEmpty) elements.chatEmpty.style.display = 'flex';
+                renderSidebarList();
+            });
         }
     }
 
@@ -1297,19 +1827,504 @@ const Chat = (() => {
 
 
     // ──────────────────────────────────────────────
+    // Group Chat & Tabs Management (Max 60 Members)
+    // ──────────────────────────────────────────────
+
+    function handleTabClick(tab) {
+        activeTab = tab;
+        [elements.tabAll, elements.tabDirect, elements.tabGroups].forEach(btn => {
+            if (btn) btn.classList.toggle('active', btn.dataset.tab === tab);
+        });
+        renderSidebarList();
+    }
+
+    function openCreateGroupModal() {
+        if (!elements.createGroupModal) return;
+        selectedGroupMembers = [];
+        if (elements.groupNameInput) elements.groupNameInput.value = '';
+        if (elements.groupDescInput) elements.groupDescInput.value = '';
+        if (elements.groupUserSearchInput) elements.groupUserSearchInput.value = '';
+        if (elements.groupUserSearchResults) elements.groupUserSearchResults.innerHTML = '';
+        if (elements.createGroupError) elements.createGroupError.style.display = 'none';
+        renderSelectedGroupMemberChips();
+        elements.createGroupModal.style.display = 'flex';
+        if (elements.groupNameInput) elements.groupNameInput.focus();
+    }
+
+    function closeCreateGroupModal() {
+        if (elements.createGroupModal) elements.createGroupModal.style.display = 'none';
+        clearTimeout(groupSearchDebounceTimer);
+    }
+
+    function renderSelectedGroupMemberChips() {
+        const totalCount = selectedGroupMembers.length + 1; // +1 for current user / admin
+        if (elements.createGroupMemberCount) {
+            elements.createGroupMemberCount.textContent = `${totalCount} / 60 members (including you)`;
+            if (totalCount >= 60) {
+                elements.createGroupMemberCount.style.background = 'rgba(239, 68, 68, 0.2)';
+                elements.createGroupMemberCount.style.color = 'var(--red-400)';
+            } else {
+                elements.createGroupMemberCount.style.background = 'rgba(139, 92, 246, 0.15)';
+                elements.createGroupMemberCount.style.color = 'var(--purple-400)';
+            }
+        }
+
+        if (!elements.createGroupSelectedChips) return;
+        let html = `
+            <div class="member-chip you">
+                <span>${escapeHtml(currentUser)} (You - Admin)</span>
+            </div>
+        `;
+        html += selectedGroupMembers.map(u => `
+            <div class="member-chip">
+                <span>@${escapeHtml(u)}</span>
+                <button type="button" class="remove-chip-btn" onclick="Chat.removeMemberFromGroupSelection('${escapeHtml(u)}')">&times;</button>
+            </div>
+        `).join('');
+        elements.createGroupSelectedChips.innerHTML = html;
+    }
+
+    function addMemberToGroupSelection(username) {
+        if (username === currentUser) return;
+        if (selectedGroupMembers.includes(username)) return;
+
+        if (selectedGroupMembers.length + 1 >= 60) {
+            if (elements.createGroupError) {
+                elements.createGroupError.textContent = 'Maximum group limit of 60 members reached!';
+                elements.createGroupError.style.display = 'block';
+            }
+            return;
+        }
+
+        selectedGroupMembers.push(username);
+        if (elements.createGroupError) elements.createGroupError.style.display = 'none';
+        renderSelectedGroupMemberChips();
+
+        // Refresh search results to show added state
+        const query = elements.groupUserSearchInput ? elements.groupUserSearchInput.value : '';
+        if (query) handleGroupUserSearch(query);
+    }
+
+    function removeMemberFromGroupSelection(username) {
+        selectedGroupMembers = selectedGroupMembers.filter(u => u !== username);
+        if (elements.createGroupError) elements.createGroupError.style.display = 'none';
+        renderSelectedGroupMemberChips();
+
+        const query = elements.groupUserSearchInput ? elements.groupUserSearchInput.value : '';
+        if (query) handleGroupUserSearch(query);
+    }
+
+    function handleGroupUserSearch(query) {
+        clearTimeout(groupSearchDebounceTimer);
+        const trimmed = (query || '').trim();
+
+        if (!trimmed) {
+            if (elements.groupUserSearchResults) elements.groupUserSearchResults.innerHTML = '';
+            return;
+        }
+
+        groupSearchDebounceTimer = setTimeout(async () => {
+            try {
+                const response = await fetch(`/api/search_users?q=${encodeURIComponent(trimmed)}`);
+                if (response.ok) {
+                    const userList = await response.json();
+                    renderGroupUserSearchResults(userList.filter(u => u.username !== currentUser));
+                }
+            } catch (err) {
+                console.error('[Chat] Group user search error:', err);
+            }
+        }, 200);
+    }
+
+    function renderGroupUserSearchResults(userList) {
+        if (!elements.groupUserSearchResults) return;
+        if (userList.length === 0) {
+            elements.groupUserSearchResults.innerHTML = `
+                <div style="padding: 0.5rem; text-align: center; color: var(--text-muted); font-size: 0.8125rem;">
+                    No users found
+                </div>
+            `;
+            return;
+        }
+
+        elements.groupUserSearchResults.innerHTML = userList.map(u => {
+            const isAdded = selectedGroupMembers.includes(u.username);
+            const isFull = (selectedGroupMembers.length + 1 >= 60);
+            return `
+                <div class="group-member-row" style="padding: 0.4rem 0.5rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div class="avatar" style="width: 28px; height: 28px; font-size: 0.75rem;">
+                            ${renderAvatar(u.avatar, u.display_name || u.username)}
+                        </div>
+                        <div>
+                            <div style="font-size: 0.8125rem; font-weight: 600;">${escapeHtml(u.display_name || u.username)}</div>
+                            <div style="font-size: 0.6875rem; color: var(--text-muted);">@${escapeHtml(u.username)}</div>
+                        </div>
+                    </div>
+                    ${isAdded ? `
+                        <button type="button" class="btn-subtle" style="font-size: 0.75rem; padding: 2px 8px; color: var(--accent-cyan);" onclick="Chat.removeMemberFromGroupSelection('${escapeHtml(u.username)}')">
+                            ✓ Added
+                        </button>
+                    ` : `
+                        <button type="button" class="btn-primary-compact" style="font-size: 0.75rem; padding: 2px 8px;" ${isFull ? 'disabled' : ''} onclick="Chat.addMemberToGroupSelection('${escapeHtml(u.username)}')">
+                            + Add
+                        </button>
+                    `}
+                </div>
+            `;
+        }).join('');
+    }
+
+    async function handleCreateGroupSubmit(e) {
+        e.preventDefault();
+        const name = (elements.groupNameInput?.value || '').trim();
+        const description = (elements.groupDescInput?.value || '').trim();
+
+        if (!name) {
+            if (elements.createGroupError) {
+                elements.createGroupError.textContent = 'Group name is required.';
+                elements.createGroupError.style.display = 'block';
+            }
+            return;
+        }
+
+        if (selectedGroupMembers.length + 1 > 60) {
+            if (elements.createGroupError) {
+                elements.createGroupError.textContent = 'A group cannot exceed 60 members.';
+                elements.createGroupError.style.display = 'block';
+            }
+            return;
+        }
+
+        if (elements.submitCreateGroupBtn) {
+            elements.submitCreateGroupBtn.disabled = true;
+            elements.submitCreateGroupBtn.classList.add('loading');
+        }
+
+        try {
+            const res = await fetch('/api/groups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    description: description,
+                    members: selectedGroupMembers,
+                }),
+            });
+
+            const data = await res.json();
+            if (res.ok && data.success) {
+                closeCreateGroupModal();
+                showNotification(`Group "${name}" created!`, 'success');
+
+                // Add to local groups list and select
+                groups.unshift(data.group);
+                if (elements.groupsCountBadge) {
+                    elements.groupsCountBadge.textContent = groups.length;
+                    elements.groupsCountBadge.style.display = 'inline-block';
+                }
+                renderSidebarList();
+                await selectGroup(data.group.group_id);
+            } else {
+                if (elements.createGroupError) {
+                    elements.createGroupError.textContent = data.error || 'Failed to create group.';
+                    elements.createGroupError.style.display = 'block';
+                }
+            }
+        } catch (err) {
+            console.error('[Chat] Create group error:', err);
+            if (elements.createGroupError) {
+                elements.createGroupError.textContent = 'Network error while creating group.';
+                elements.createGroupError.style.display = 'block';
+            }
+        } finally {
+            if (elements.submitCreateGroupBtn) {
+                elements.submitCreateGroupBtn.disabled = false;
+                elements.submitCreateGroupBtn.classList.remove('loading');
+            }
+        }
+    }
+
+    async function openGroupInfoModal() {
+        if (!activeGroup || activeChatType !== 'group' || !elements.groupInfoModal) return;
+
+        try {
+            const res = await fetch(`/api/groups/${activeGroup.group_id}`);
+            const data = await res.json();
+            if (res.ok && data.success) {
+                activeGroup = data.group;
+                const members = data.members || [];
+                const memberCount = members.length;
+
+                if (elements.groupInfoTitle) elements.groupInfoTitle.textContent = activeGroup.name;
+                if (elements.groupInfoName) elements.groupInfoName.textContent = activeGroup.name;
+                if (elements.groupInfoDesc) elements.groupInfoDesc.textContent = activeGroup.description || 'No description set';
+                if (elements.groupInfoLimitBadge) elements.groupInfoLimitBadge.textContent = `${memberCount} / 60 Members`;
+                if (elements.groupInfoMemberCount) elements.groupInfoMemberCount.textContent = `${memberCount} members (max 60)`;
+
+                // Render member list
+                if (elements.groupInfoMembersList) {
+                    elements.groupInfoMembersList.innerHTML = members.map(m => {
+                        const isSelf = m.username === currentUser;
+                        const isAdmin = m.username === activeGroup.created_by;
+                        return `
+                            <div class="group-member-row">
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <div class="avatar" style="width: 32px; height: 32px; font-size: 0.8125rem;">
+                                        ${renderAvatar(m.avatar, m.display_name || m.username)}
+                                    </div>
+                                    <div>
+                                        <div style="font-size: 0.875rem; font-weight: 600;">
+                                            ${escapeHtml(m.display_name || m.username)} ${isSelf ? '<small style="color: var(--text-muted);">(You)</small>' : ''}
+                                        </div>
+                                        <div style="font-size: 0.75rem; color: var(--text-muted);">@${escapeHtml(m.username)}</div>
+                                    </div>
+                                </div>
+                                <div>
+                                    ${isAdmin ? '<span class="admin-badge">Admin</span>' : ''}
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                if (elements.groupAddMemberInput) elements.groupAddMemberInput.value = '';
+                if (elements.groupAddMemberMsg) elements.groupAddMemberMsg.style.display = 'none';
+
+                // Disable add section if limit 60 is reached
+                if (elements.groupAddMemberBtn) {
+                    elements.groupAddMemberBtn.disabled = (memberCount >= 60);
+                }
+                if (elements.groupAddMemberInput) {
+                    elements.groupAddMemberInput.disabled = (memberCount >= 60);
+                    if (memberCount >= 60) {
+                        elements.groupAddMemberInput.placeholder = 'Group is full (60/60 members reached)';
+                    } else {
+                        elements.groupAddMemberInput.placeholder = 'Enter username to add...';
+                    }
+                }
+
+                elements.groupInfoModal.style.display = 'flex';
+            }
+        } catch (err) {
+            console.error('[Chat] Open group info error:', err);
+            showNotification('Failed to load group details', 'error');
+        }
+    }
+
+    function closeGroupInfoModal() {
+        if (elements.groupInfoModal) elements.groupInfoModal.style.display = 'none';
+    }
+
+    async function handleAddMemberToGroup() {
+        if (!activeGroup) return;
+        const input = elements.groupAddMemberInput;
+        const msg = elements.groupAddMemberMsg;
+        const username = (input ? input.value : '').trim();
+
+        if (!username) return;
+
+        if (activeGroup.members && activeGroup.members.length >= 60) {
+            if (msg) {
+                msg.textContent = 'Cannot add member: maximum group limit of 60 members reached.';
+                msg.className = 'flash-message error';
+                msg.style.display = 'block';
+            }
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/groups/${activeGroup.group_id}/members`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username }),
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                if (msg) {
+                    msg.textContent = `@${username} added to group!`;
+                    msg.className = 'flash-message success';
+                    msg.style.display = 'block';
+                }
+                if (input) input.value = '';
+                // Refresh modal & keys
+                await openGroupInfoModal();
+                await loadGroups();
+            } else {
+                if (msg) {
+                    msg.textContent = data.error || 'Failed to add member.';
+                    msg.className = 'flash-message error';
+                    msg.style.display = 'block';
+                }
+            }
+        } catch (err) {
+            console.error('[Chat] Add member error:', err);
+            if (msg) {
+                msg.textContent = 'Network error while adding member.';
+                msg.className = 'flash-message error';
+                msg.style.display = 'block';
+            }
+        }
+    }
+
+    async function handleLeaveGroup() {
+        if (!activeGroup) return;
+        if (!confirm(`Are you sure you want to leave "${activeGroup.name}"?`)) return;
+
+        const groupId = activeGroup.group_id;
+        try {
+            const res = await fetch(`/api/groups/${groupId}/members/${currentUser}`, {
+                method: 'DELETE',
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                closeGroupInfoModal();
+                showNotification(`Left "${activeGroup.name}"`, 'info');
+                // Remove from local list
+                groups = groups.filter(g => g.group_id !== groupId);
+                if (elements.groupsCountBadge) {
+                    elements.groupsCountBadge.textContent = groups.length;
+                    elements.groupsCountBadge.style.display = groups.length > 0 ? 'inline-block' : 'none';
+                }
+                activeChat = null;
+                activeChatType = 'direct';
+                activeGroup = null;
+                document.querySelector('.chat-container')?.classList.remove('mobile-chat-open');
+                if (elements.chatActive) elements.chatActive.style.display = 'none';
+                if (elements.chatEmpty) elements.chatEmpty.style.display = 'flex';
+                renderSidebarList();
+            } else {
+                showNotification(data.error || 'Failed to leave group', 'error');
+            }
+        } catch (err) {
+            console.error('[Chat] Leave group error:', err);
+            showNotification('Network error while leaving group', 'error');
+        }
+    }
+
+    function handleGroupCreated(data) {
+        if (!data) return;
+        const group = data.group || data;
+        if (!group || !group.group_id) return;
+
+        // PRIVACY ENFORCEMENT: Only process if currentUser is an explicit member
+        if (!Array.isArray(group.members) || !group.members.includes(currentUser)) {
+            return;
+        }
+
+        if (!groups.find(g => g.group_id === group.group_id)) {
+            groups.unshift(group);
+            updateGroupsCountBadge();
+            renderSidebarList();
+        }
+    }
+
+    function handleGroupUpdated(data) {
+        if (!data) return;
+        const group = data.group || data;
+        const groupId = group.group_id || data.group_id;
+        if (!groupId) return;
+
+        // Extract member usernames
+        let memberUsernames = [];
+        if (Array.isArray(data.members)) {
+            memberUsernames = data.members.map(m => (typeof m === 'object' && m ? m.username : m));
+        } else if (Array.isArray(group.members)) {
+            memberUsernames = group.members.map(m => (typeof m === 'object' && m ? m.username : m));
+        }
+
+        // If current user is NO LONGER a member of this group, remove it immediately!
+        if (memberUsernames.length > 0 && !memberUsernames.includes(currentUser)) {
+            groups = groups.filter(item => item.group_id !== groupId);
+            if (activeChatType === 'group' && activeChat === groupId) {
+                activeChat = null;
+                activeGroup = null;
+                if (elements.chatActive) elements.chatActive.style.display = 'none';
+                if (elements.chatEmpty) elements.chatEmpty.style.display = 'flex';
+                showNotification('You are no longer a member of this group.', 'info');
+            }
+            updateGroupsCountBadge();
+            renderSidebarList();
+            return;
+        }
+
+        const g = groups.find(item => item.group_id === groupId);
+        if (g) {
+            if (group.name) g.name = group.name;
+            if (group.description !== undefined) g.description = group.description;
+            if (memberUsernames.length > 0) {
+                g.members = memberUsernames;
+                g.member_count = memberUsernames.length;
+            }
+            updateGroupsCountBadge();
+            renderSidebarList();
+        } else if (memberUsernames.includes(currentUser)) {
+            // User was newly added to this group!
+            groups.unshift(group);
+            updateGroupsCountBadge();
+            renderSidebarList();
+        }
+
+        if (activeChatType === 'group' && activeChat === groupId) {
+            if (elements.headerUsernameBadge && memberUsernames.length > 0) {
+                elements.headerUsernameBadge.textContent = `👥 Group (${memberUsernames.length}/60)`;
+            }
+        }
+    }
+
+    function handleGroupLeft(data) {
+        if (!data || !data.group_id) return;
+        if (data.username === currentUser) {
+            groups = groups.filter(g => g.group_id !== data.group_id);
+            if (activeChat === data.group_id) {
+                activeChat = null;
+                activeGroup = null;
+                if (elements.chatActive) elements.chatActive.style.display = 'none';
+                if (elements.chatEmpty) elements.chatEmpty.style.display = 'flex';
+            }
+            updateGroupsCountBadge();
+            renderSidebarList();
+        } else if (activeChatType === 'group' && activeChat === data.group_id) {
+            // Another member left
+            if (activeGroup && Array.isArray(activeGroup.members)) {
+                activeGroup.members = activeGroup.members.filter(m => m !== data.username);
+                if (elements.headerUsernameBadge) {
+                    elements.headerUsernameBadge.textContent = `👥 Group (${activeGroup.members.length}/60)`;
+                }
+            }
+            const g = groups.find(item => item.group_id === data.group_id);
+            if (g && Array.isArray(g.members)) {
+                g.members = g.members.filter(m => m !== data.username);
+                g.member_count = g.members.length;
+            }
+            renderSidebarList();
+        }
+    }
+
+
+    // ──────────────────────────────────────────────
     // Public API
     // ──────────────────────────────────────────────
 
     return {
         init,
         selectContact,
+        selectGroup,
         sendMessage,
         openNewChatModal,
         openNewChatWithQuery,
         closeNewChatModal,
         startChatWith,
         loadContacts,
+        loadGroups,
         openEditProfileModal,
         closeEditProfileModal,
+        openCreateGroupModal,
+        closeCreateGroupModal,
+        openGroupInfoModal,
+        closeGroupInfoModal,
+        addMemberToGroupSelection,
+        removeMemberFromGroupSelection,
+        handleTabClick,
     };
 })();

@@ -24,3 +24,21 @@ class Config:
     PBKDF2_HASH_ALGO = "sha256"
     SALT_LENGTH = 32  # 256-bit salt
     HASH_LENGTH = 32  # 256-bit derived key
+
+    # Email / SMTP Settings (Gmail)
+    MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.gmail.com")
+    MAIL_PORT = int(os.getenv("MAIL_PORT", 587))
+    MAIL_USE_TLS = os.getenv("MAIL_USE_TLS", "true").lower() in ("true", "1", "yes")
+    MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
+    MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
+    MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER", "") or os.getenv("MAIL_USERNAME", "") or "SecureChat <noreply@securechat.io>"
+
+    # OTP Settings
+    OTP_EXPIRY_MINUTES = int(os.getenv("OTP_EXPIRY_MINUTES", 10))
+    OTP_RESEND_COOLDOWN_SECONDS = int(os.getenv("OTP_RESEND_COOLDOWN_SECONDS", 60))
+
+    # Group Chat Settings
+    GROUP_MAX_MEMBERS = int(os.getenv("GROUP_MAX_MEMBERS", 60))
+
+
+

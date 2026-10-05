@@ -9,8 +9,6 @@
 {% block body %}
 <div class="auth-wrapper">
     <div class="auth-card">
-        <!-- Gradient top accent is via CSS ::before -->
-
         <div class="auth-logo">
             <div class="logo-icon">🔐</div>
             <h1>SecureChat</h1>
@@ -29,7 +27,10 @@
             {% endif %}
         {% endwith %}
 
-        <form id="login-form" method="POST" action="{{ url_for('login') }}">
+        <!-- ════════════════════════════════════════════ -->
+        <!-- LOGIN FORM                                   -->
+        <!-- ════════════════════════════════════════════ -->
+        <form id="login-form" method="POST" action="{{ url_for('login') }}" class="auth-form-panel active">
             <div class="form-group">
                 <label for="login-username">Username</label>
                 <div class="input-wrapper">

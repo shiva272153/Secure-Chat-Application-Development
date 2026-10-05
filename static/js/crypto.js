@@ -383,6 +383,55 @@ const SecureCrypto = (() => {
         return await decryptMessage(encryptedPayload.ciphertext, encryptedPayload.iv, aesKey);
     }
 
+    /**
+     * Encrypt a message for a group with up to 60 members.
+     * Generates a fresh AES-256 key, encrypts the plaintext, 
+     * then encrypts the AES key individually with each member's RSA public key.
+     * 
+     * @param {string} plaintext - Message to encrypt.
+     * @param {Object} memberPublicKeys - Object mapping username -> CryptoKey (RSA public key).
+     * @returns {Promise<Object>} { ciphertext, iv, encrypted_keys }
+     */
+    async function encryptForGroup(plaintext, memberPublicKeys) {
+        // Generate single fresh AES key for this message
+        const aesKey = await generateAESKey();
+
+        // Encrypt the message content
+        const { ciphertext, iv } = await encryptMessage(plaintext, aesKey);
+
+        // Encrypt the AES key for every member in the group
+        const encrypted_keys = {};
+        for (const [username, pubKey] of Object.entries(memberPublicKeys)) {
+            if (pubKey) {
+                encrypted_keys[username] = await encryptAESKeyWithRSA(aesKey, pubKey);
+            }
+        }
+
+        return {
+            ciphertext,
+            iv,
+            encrypted_keys,
+        };
+    }
+
+    /**
+     * Decrypt a received group message.
+     * 
+     * @param {Object} encryptedPayload - The group message payload from server.
+     * @param {CryptoKey} privateKey - Current user's RSA private key.
+     * @param {string} currentUser - Current username.
+     * @returns {Promise<string>} The decrypted plaintext.
+     */
+    async function decryptGroupMessage(encryptedPayload, privateKey, currentUser) {
+        if (!encryptedPayload.encrypted_keys || !encryptedPayload.encrypted_keys[currentUser]) {
+            throw new Error(`No encrypted AES key available for user: ${currentUser}`);
+        }
+
+        const encryptedAESKey = encryptedPayload.encrypted_keys[currentUser];
+        const aesKey = await decryptAESKeyWithRSA(encryptedAESKey, privateKey);
+        return await decryptMessage(encryptedPayload.ciphertext, encryptedPayload.iv, aesKey);
+    }
+
 
     // ──────────────────────────────────────────────
     // Public API
@@ -410,6 +459,8 @@ const SecureCrypto = (() => {
         // High-Level
         encryptForSending,
         decryptReceived,
+        encryptForGroup,
+        decryptGroupMessage,
 
         // Utilities
         arrayBufferToBase64,

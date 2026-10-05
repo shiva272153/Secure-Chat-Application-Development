@@ -32,66 +32,126 @@
             🔑 Generating RSA-2048 keypair...
         </div>
 
-        <form id="register-form">
-            <div class="form-group">
-                <label for="reg-username">Username</label>
-                <div class="input-wrapper">
-                    <input
-                        type="text"
-                        class="form-input"
-                        id="reg-username"
-                        name="username"
-                        placeholder="Choose a username (min 3 chars)"
-                        autocomplete="username"
-                        minlength="3"
-                        required
-                    >
-                    <span class="input-icon">👤</span>
+        <!-- ════════════════════════════════════════════ -->
+        <!-- REGISTRATION FORM WITH EMAIL OTP             -->
+        <!-- ════════════════════════════════════════════ -->
+        <form id="register-form" class="auth-form-panel active">
+
+            <!-- STEP 1: Account Details -->
+            <div id="reg-step-1" class="auth-step active">
+                <div class="form-group">
+                    <label for="reg-username">Username</label>
+                    <div class="input-wrapper">
+                        <input
+                            type="text"
+                            class="form-input"
+                            id="reg-username"
+                            name="username"
+                            placeholder="Choose a username (min 3 chars)"
+                            autocomplete="username"
+                            minlength="3"
+                            required
+                        >
+                        <span class="input-icon">👤</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="reg-email">Email Address</label>
+                    <div class="input-wrapper">
+                        <input
+                            type="email"
+                            class="form-input"
+                            id="reg-email"
+                            name="email"
+                            placeholder="your.email@example.com"
+                            autocomplete="email"
+                            required
+                        >
+                        <span class="input-icon">✉️</span>
+                    </div>
+                    <div class="input-hint" style="font-size: 0.6875rem; color: var(--text-muted); margin-top: 0.25rem;">
+                        We'll send a 6-digit verification code to this email
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="reg-password">Password</label>
+                    <div class="input-wrapper">
+                        <input
+                            type="password"
+                            class="form-input"
+                            id="reg-password"
+                            name="password"
+                            placeholder="Min 8 characters"
+                            autocomplete="new-password"
+                            minlength="8"
+                            required
+                        >
+                        <span class="input-icon">🔑</span>
+                    </div>
+                    <div class="password-strength">
+                        <div class="password-strength-bar"></div>
+                    </div>
+                    <div class="password-strength-text"></div>
+                </div>
+
+                <div class="form-group">
+                    <label for="reg-confirm-password">Confirm Password</label>
+                    <div class="input-wrapper">
+                        <input
+                            type="password"
+                            class="form-input"
+                            id="reg-confirm-password"
+                            name="confirm_password"
+                            placeholder="Re-enter your password"
+                            autocomplete="new-password"
+                            minlength="8"
+                            required
+                        >
+                        <span class="input-icon">🔒</span>
+                    </div>
+                </div>
+
+                <button type="button" class="btn-primary" id="reg-next-btn">
+                    <span class="btn-spinner"></span>
+                    <span class="btn-text">Continue to Verification →</span>
+                </button>
+            </div>
+
+            <!-- STEP 2: Email OTP Code -->
+            <div id="reg-step-2" class="auth-step">
+                <div class="otp-sent-info">
+                    <span class="otp-sent-icon">📧</span>
+                    <div class="otp-sent-text">
+                        <span>Code sent to <strong id="display-reg-email"></strong></span>
+                        <button type="button" class="btn-change-email" id="change-email-btn">Edit</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="reg-otp">Enter 6-Digit Code</label>
+                    <div class="otp-input-group" id="reg-otp-input-group">
+                        <input type="text" maxlength="1" class="otp-digit" data-index="0" inputmode="numeric" autocomplete="one-time-code">
+                        <input type="text" maxlength="1" class="otp-digit" data-index="1" inputmode="numeric">
+                        <input type="text" maxlength="1" class="otp-digit" data-index="2" inputmode="numeric">
+                        <input type="text" maxlength="1" class="otp-digit" data-index="3" inputmode="numeric">
+                        <input type="text" maxlength="1" class="otp-digit" data-index="4" inputmode="numeric">
+                        <input type="text" maxlength="1" class="otp-digit" data-index="5" inputmode="numeric">
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-primary" id="register-submit-btn">
+                    <span class="btn-spinner"></span>
+                    <span class="btn-text">Verify & Create Account</span>
+                </button>
+
+                <div class="otp-resend">
+                    <span id="otp-timer">Resend code in <strong>60s</strong></span>
+                    <button type="button" class="btn-link" id="resend-otp-btn" style="display:none;">Resend Code</button>
                 </div>
             </div>
 
-            <div class="form-group">
-                <label for="reg-password">Password</label>
-                <div class="input-wrapper">
-                    <input
-                        type="password"
-                        class="form-input"
-                        id="reg-password"
-                        name="password"
-                        placeholder="Min 8 characters"
-                        autocomplete="new-password"
-                        minlength="8"
-                        required
-                    >
-                    <span class="input-icon">🔑</span>
-                </div>
-                <div class="password-strength">
-                    <div class="password-strength-bar"></div>
-                </div>
-                <div class="password-strength-text"></div>
-            </div>
-
-            <div class="form-group">
-                <label for="reg-confirm-password">Confirm Password</label>
-                <div class="input-wrapper">
-                    <input
-                        type="password"
-                        class="form-input"
-                        id="reg-confirm-password"
-                        name="confirm_password"
-                        placeholder="Re-enter your password"
-                        autocomplete="new-password"
-                        minlength="8"
-                        required
-                    >
-                    <span class="input-icon">🔒</span>
-                </div>
-            </div>
-
-            <button type="submit" class="btn-primary" id="register-submit-btn">
-                <span class="btn-spinner"></span>
-                <span class="btn-text">Create Account</span>
-            </button>
         </form>
 
         <div class="auth-footer">

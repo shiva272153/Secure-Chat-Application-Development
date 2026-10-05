@@ -179,3 +179,188 @@
     color: var(--text-muted);
     transition: color var(--transition-fast);
 }
+
+
+/* ═══════════════════════════════════════════════
+   Email OTP Verification Styles
+   ═══════════════════════════════════════════════ */
+
+.auth-step {
+    display: none;
+}
+
+.auth-step.active {
+    display: block;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.otp-sent-info {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.25rem;
+    background: rgba(139, 92, 246, 0.08);
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.otp-sent-info strong {
+    color: var(--purple-400);
+}
+
+.otp-sent-icon {
+    font-size: 1.25rem;
+}
+
+.otp-sent-text {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.35rem;
+}
+
+.btn-change-email {
+    background: none;
+    border: none;
+    color: var(--purple-400);
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+    margin-left: 0.25rem;
+    transition: color 0.2s ease;
+}
+
+.btn-change-email:hover {
+    color: var(--purple-300);
+}
+
+.otp-input-group {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    margin: 0.75rem 0 1.25rem;
+}
+
+.otp-digit {
+    width: 48px;
+    height: 54px;
+    text-align: center;
+    font-size: 1.375rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    caret-color: var(--purple-500);
+}
+
+.otp-digit:focus {
+    border-color: var(--purple-500);
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2);
+}
+
+.otp-digit:not(:placeholder-shown) {
+    border-color: var(--purple-400);
+}
+
+.otp-resend {
+    text-align: center;
+    margin-top: 1rem;
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+}
+
+.btn-link {
+    background: none;
+    border: none;
+    color: var(--purple-400);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+    transition: color 0.2s ease;
+}
+
+.btn-link:hover {
+    color: var(--purple-300);
+}
+
+/* ── Mobile Responsive Auth Styles ── */
+@media (max-width: 480px) {
+    .auth-wrapper {
+        padding: 1rem 0.75rem;
+        min-height: 100vh;
+        min-height: 100dvh;
+        align-items: center;
+    }
+
+    .auth-card {
+        padding: 1.5rem 1.125rem;
+        border-radius: var(--radius-xl);
+        max-width: 100%;
+    }
+
+    .auth-logo {
+        margin-bottom: 1.25rem;
+    }
+
+    .auth-logo .logo-icon {
+        width: 46px;
+        height: 46px;
+        font-size: 1.25rem;
+    }
+
+    .auth-logo h1 {
+        font-size: 1.375rem;
+    }
+
+    .otp-input-group {
+        gap: 0.35rem;
+        margin: 0.625rem 0 1rem;
+    }
+
+    .otp-digit {
+        width: 42px;
+        height: 50px;
+        font-size: 1.25rem;
+        border-radius: var(--radius-sm);
+    }
+
+    .form-input {
+        font-size: 16px !important; /* Prevents auto-zoom on iOS */
+    }
+}
+
+@media (max-width: 360px) {
+    .auth-card {
+        padding: 1.25rem 0.875rem;
+    }
+
+    .otp-input-group {
+        gap: 0.25rem;
+    }
+
+    .otp-digit {
+        width: 36px;
+        height: 44px;
+        font-size: 1.1rem;
+    }
+}
+
